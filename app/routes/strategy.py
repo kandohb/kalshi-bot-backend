@@ -5,15 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
 
 from app.config import settings
 from app.db import StrategyRun, Candidate, async_session
 from app.kalshi_client import kalshi
 from app.lookup_scorer import LookupScorer
-from app.strategy import scan_markets, place_approved, ScanParams, BOT_ID
 
 router = APIRouter(prefix="/api/strategy")
 
@@ -679,122 +677,3 @@ async def wizard_run(req: WizardRunRequest):
                     r.status_detail = f"Failed: {exc}"
                     await session.commit()
         raise HTTPException(status_code=500, detail=f"wizard run failed: {exc}") from exc
-
-
-class ScanRequest(BaseModel):
-    max_expiry_days: int = 7
-    biases: list[str] = ["longshot_no", "favorite_yes", "asymmetry"]
-    category: str = ""
-    series_ticker: str = ""
-    league_series: list[str] = []
-
-
-@router.post("/scan")
-async def trigger_scan(req: ScanRequest | None = None):
-    """Scan markets and generate trade candidates (no orders placed).
-
-    Accepts optional params: max_expiry_days, biases, category, series_ticker, league_series.
-    """
-    params = ScanParams(
-        max_expiry_days=req.max_expiry_days if req else 7,
-        biases=req.biases if req else ["longshot_no", "favorite_yes", "asymmetry"],
-        category=req.category if req else "",
-        series_ticker=req.series_ticker if req else "",
-        league_series=req.league_series if req else [],
-    )
-    scan_id, slog = await scan_markets(params)
-    return {
-        "scan_id": scan_id,
-        "log": slog.to_dict(),
-    }
-
-
-class PlaceRequest(BaseModel):
-    candidate_ids: list[int]
-
-
-@router.post("/place")
-async def trigger_place(req: PlaceRequest):
-    """Place orders for user-approved candidates."""
-    if not req.candidate_ids:
-        raise HTTPException(status_code=400, detail="No candidates selected")
-    result = await place_approved(req.candidate_ids)
-    return result
-
-
-class UpdateCandidateRequest(BaseModel):
-    status: str  # "approved" or "rejected"
-
-
-@router.patch("/candidates/{candidate_id}")
-async def update_candidate(candidate_id: int, req: UpdateCandidateRequest):
-    """Update candidate status (approve/reject)."""
-    if req.status not in ("approved", "rejected", "pending"):
-        raise HTTPException(status_code=400, detail="Invalid status")
-    async with async_session() as session:
-        cand = await session.get(Candidate, candidate_id)
-        if not cand:
-            raise HTTPException(status_code=404, detail="Candidate not found")
-        cand.status = req.status
-        await session.commit()
-        return {"id": cand.id, "status": cand.status}
-
-
-@router.get("/candidates/{scan_id}")
-async def get_candidates(scan_id: int):
-    """Get all candidates for a scan."""
-    async with async_session() as session:
-        result = await session.execute(
-            select(Candidate).where(
-                Candidate.scan_id == scan_id,
-                Candidate.bot_id == BOT_ID,
-            ).order_by(Candidate.id)
-        )
-        rows = list(result.scalars().all())
-    return {
-        "candidates": [
-            {
-                "id": c.id,
-                "scan_id": c.scan_id,
-                "ticker": c.ticker,
-                "title": c.title,
-                "side": c.side,
-                "price": c.price,
-                "cost": c.cost,
-                "count": c.count,
-                "bias_type": c.bias_type,
-                "category": c.category,
-                "expiry_time": c.expiry_time,
-                "reason": c.reason,
-                "ai_explanation": c.ai_explanation,
-                "status": c.status,
-                "yes_bid": c.yes_bid,
-                "yes_ask": c.yes_ask,
-                "volume": c.volume,
-            }
-            for c in rows
-        ]
-    }
-
-
-@router.get("/status")
-async def strategy_status():
-    """Return the most recent strategy run."""
-    async with async_session() as session:
-        result = await session.execute(
-            select(StrategyRun).where(StrategyRun.bot_id == BOT_ID).order_by(StrategyRun.id.desc()).limit(1)
-        )
-        run = result.scalar_one_or_none()
-    if not run:
-        return {"last_run": None}
-    return {
-        "last_run": {
-            "id": run.id,
-            "status": run.status,
-            "markets_scanned": run.markets_scanned,
-            "orders_placed": run.orders_placed,
-            "errors": run.errors or None,
-            "started_at": run.started_at.isoformat() if run.started_at else None,
-            "ended_at": run.ended_at.isoformat() if run.ended_at else None,
-        }
-    }

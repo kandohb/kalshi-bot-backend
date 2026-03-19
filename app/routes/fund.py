@@ -9,7 +9,7 @@ from app.db import StrategyRun, Order, Candidate, async_session
 
 router = APIRouter(prefix="/api/fund")
 
-BOT_IDS = ["bias_scalper", "live_scalper"]
+BOT_IDS = ["wizard_runner"]
 
 
 @router.get("/overview")
