@@ -1,0 +1,25 @@
+# Secrets
+.env*
+!*.example
+.env.local*
+*.pem
+kalshi-key.pem
+
+# Local DB/data
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Python env/cache
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
